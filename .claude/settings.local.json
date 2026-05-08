@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(if \\(-not $?\\) { \"Directory not found or empty\" })",
+      "PowerShell(Get-ChildItem \"d:\\\\Study\\\\tsai\\\\product_intelligence_mcp\" -Recurse | Where-Object { $_.Name -notmatch \"^\\\\.git\" } | Select-Object FullName)",
+      "Bash(pip install *)",
+      "Bash(python -c \"import flask; print\\('Flask', flask.__version__\\)\")",
+      "Bash(C:\\\\Users\\\\tarun\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe -m pip install --upgrade flask -q)",
+      "Bash(C:\\\\Users\\\\tarun\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe -c \"import flask; print\\('Flask', flask.__version__\\)\")",
+      "PowerShell(C:\\\\Users\\\\tarun\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe -m pip install python-dotenv python-slugify fastmcp google-search-results httpx beautifulsoup4 flask -q)"
+    ]
+  }
+}

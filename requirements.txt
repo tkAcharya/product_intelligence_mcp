@@ -1,0 +1,7 @@
+fastmcp
+google-search-results
+httpx
+beautifulsoup4
+python-dotenv
+python-slugify
+flask
