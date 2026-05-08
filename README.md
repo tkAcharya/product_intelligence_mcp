@@ -4,6 +4,8 @@
 
 Product Intelligence MCP is a Model Context Protocol server that lets a Claude agent search for a product across multiple online retailers, fetch review snippets with pros and cons, save the enriched comparison data to disk, and instantly render a live comparison dashboard in your browser — all without leaving your AI assistant.
 
+The dashboard is built with **[Prefab](https://prefab.prefect.io)** — a reactive Python UI framework. The page stays open indefinitely. When a new search runs, the browser updates the cards in-place with no page reload.
+
 ## Setup
 
 1. **Clone / download** this repository into a local folder.
@@ -17,10 +19,9 @@ Product Intelligence MCP is a Model Context Protocol server that lets a Claude a
    ```bash
    cp .env.example .env
    ```
-   Open `.env` and fill in your keys:
+   Open `.env` and fill in your key:
    ```
    SERPAPI_KEY=your_serpapi_key_here
-   UI_PORT=5050
    ```
 
 4. **Get a SerpAPI key (free tier available):**
@@ -35,9 +36,31 @@ Product Intelligence MCP is a Model Context Protocol server that lets a Claude a
 
 6. **Connect Claude Desktop** (see section below) and use the example prompt.
 
-## No Prefab Cloud needed
+## How the UI works
 
-The dashboard UI runs entirely on your local machine — no external API keys or cloud accounts required beyond SerpAPI. A lightweight Flask server is started automatically on `http://localhost:5050` the first time the agent calls the dashboard tool. After every product comparison the file `ui/dashboard.html` is regenerated from scratch and your browser opens automatically to show the updated results.
+### Initial load
+When the agent calls `push_prefab_component` for the first time:
+
+1. Comparison data is written to `ui/current_comparison.json`
+2. `prefab_app.build_html()` generates a self-contained HTML page using Prefab components (`ForEach`, `If`, `Rx`, `Card`, `Badge`, `Link`, etc.) with the latest data baked in as initial state
+3. The page also contains a `SetInterval` action that calls `GET /api/data` every 3 seconds
+4. A Flask server starts on `http://127.0.0.1:5175` serving two routes:
+   - `GET /` — the cached Prefab HTML page
+   - `GET /api/data` — the live JSON endpoint
+5. Your browser opens to `http://127.0.0.1:5175`
+
+### Live updates (no page reload)
+On every subsequent search the agent runs:
+
+1. New comparison data is written to `ui/current_comparison.json`
+2. The cached HTML is rebuilt with the new initial state
+3. The browser page that's already open polls `GET /api/data` within 3 seconds
+4. The Prefab React runtime receives the new data, calls `SetState("data", result)`, and re-renders only the changed components — `ForEach` rebuilds the card list, `If` toggles the badges, `Rx` text nodes update — **the tab never reloads**
+
+### Why this is different from a static HTML approach
+The old approach generated a raw HTML string with a Python loop and served it via Flask. Each new search replaced the entire file and the user had to refresh.
+
+The new approach generates HTML once using Prefab's component tree (`ForEach`, `If`, `Rx`). The React runtime embedded in that page owns the live DOM. Updates flow through the reactive state system — only the components whose data changed are re-rendered.
 
 ## Connecting to Claude Desktop
 
@@ -54,9 +77,7 @@ Add the following to your Claude Desktop `claude_desktop_config.json` (usually a
 }
 ```
 
-Replace `/absolute/path/to/server.py` with the actual absolute path to `server.py` on your system, for example:
-- macOS/Linux: `/home/user/product_intelligence_mcp/server.py`
-- Windows: `C:\Users\user\product_intelligence_mcp\server.py`
+Replace `/absolute/path/to/server.py` with the actual absolute path on your system.
 
 ## Example Agent Prompt
 
@@ -69,15 +90,9 @@ The agent will automatically:
 1. Call `search_product` to find retailers and prices
 2. Call `get_product_reviews` for each retailer to collect pros and cons
 3. Call `save_comparison_to_file` to persist the data
-4. Call `push_prefab_component` to generate the HTML and open your browser
+4. Call `push_prefab_component` to build the Prefab UI and open your browser
 
-## How dynamic component generation works
-
-- SerpAPI returns N retailers per search (could be 3, could be 8 — varies by product)
-- A Python loop in `prefab_client.py` generates exactly N cards in the HTML — the number is never hardcoded
-- Each new search completely overwrites `ui/dashboard.html` from scratch
-- No two searches produce the same UI structure; the layout adapts to however many retailers were found
-- Best Value (lowest price) gets a green glow border; Top Rated gets a yellow glow border — determined at render time from the actual data
+Run another comparison while the tab is open — the cards will swap out within 3 seconds.
 
 ## Project Architecture
 
@@ -85,15 +100,18 @@ The agent will automatically:
 You ask Claude: "Compare mini LED TVs"
         │
         ▼
-  server.py  ← MCP tools (the brain)
-  ┌──────────────────────────────────────────────────────┐
-  │  Tool 1: search_product           │──► serpapi_client.py ──► SerpAPI (Google Shopping)
-  │  Tool 2: get_product_reviews      │──► serpapi_client.py ──► SerpAPI (Google Search)
-  │  Tool 3: save_comparison_to_file  │──► file_manager.py   ──► saved_comparisons/*.json
-  │  Tool 4: push_prefab_component    │──► prefab_client.py  ──► ui/dashboard.html
-  │  Tool 5: list_comparisons         │                           + Flask server on :5050
-  │  Tool 6: load_saved_comparison    │                           + webbrowser.open()
-  └──────────────────────────────────────────────────────┘
+  server.py  ← MCP tools
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  Tool 1: search_product          ──► serpapi_client.py ──► SerpAPI (Shopping)
+  │  Tool 2: get_product_reviews     ──► serpapi_client.py ──► SerpAPI (Search)
+  │  Tool 3: save_comparison_to_file ──► file_manager.py   ──► saved_comparisons/*.json
+  │  Tool 4: push_prefab_component   ──► prefab_client.py
+  │  Tool 5: list_comparisons        │        │
+  │  Tool 6: load_saved_comparison   │        ▼
+  └──────────────────────────────────┘  writes current_comparison.json
+                                         builds Prefab HTML (prefab_app.py)
+                                         starts Flask on :5175
+                                         opens browser
 ```
 
 ### The 6 tools and their order of use
@@ -103,7 +121,7 @@ You ask Claude: "Compare mini LED TVs"
 | 1 | `search_product` | Searches Google Shopping via SerpAPI, returns retailer list |
 | 2 | `get_product_reviews` | Searches Google for reviews of that product at that retailer |
 | 3 | `save_comparison_to_file` | Saves enriched data as a timestamped JSON |
-| 4 | `push_prefab_component` | Generates HTML + starts Flask + opens browser |
+| 4 | `push_prefab_component` | Builds Prefab HTML, starts server, opens browser |
 | 5 | `list_comparisons` | Lists all past saved JSONs |
 | 6 | `load_saved_comparison` | Loads a specific past JSON |
 
@@ -111,12 +129,13 @@ You ask Claude: "Compare mini LED TVs"
 
 | File | Role |
 |---|---|
-| `server.py` | Entry point — registers all tools with FastMCP, starts the MCP server over stdio |
+| `server.py` | MCP entry point — registers all 6 tools, runs over stdio |
 | `serpapi_client.py` | Fetches prices from Google Shopping and review snippets from Google Search |
 | `file_manager.py` | Saves, loads, and lists timestamped JSON comparison files |
-| `prefab_client.py` | Generates the HTML dashboard, runs Flask, opens the browser |
+| `prefab_app.py` | Builds the Prefab component tree; `build_html()` returns a self-contained HTML page with `SetInterval + Fetch` polling wired in |
+| `prefab_client.py` | Thin Flask server — `GET /` serves the cached Prefab HTML, `GET /api/data` serves live JSON; calls `build_html()` on each new search |
 
-## Data Flow Summary
+## Data Flow
 
 ```
 .env (SERPAPI_KEY)
@@ -129,52 +148,41 @@ serpapi_client.py ──► SerpAPI ──► Google Shopping
      ▼
 list of dicts: [{ retailer, price, rating, pros, cons, link }, ...]
      │
-     ├──► file_manager.py ──► saved_comparisons/product-name_YYYYMMDD_HHMMSS.json
+     ├──► file_manager.py ──► saved_comparisons/product_YYYYMMDD_HHMMSS.json
      │
      └──► prefab_client.py
-              ├── generate_dashboard_html()  ──► loops over N items → N cards (never hardcoded)
-              ├── write_dashboard_file()     ──► ui/dashboard.html  (overwritten each search)
-              ├── start_local_server()       ──► Flask on localhost:5050 (starts once, reuses)
-              └── webbrowser.open()          ──► your default browser opens automatically
-```
+              ├── writes ui/current_comparison.json
+              ├── calls prefab_app.build_html()  ──► PrefabApp with:
+              │        ├── state: {"data": enriched_data}   (initial render)
+              │        ├── on_mount: SetInterval(3000, Fetch /api/data)
+              │        └── ForEach(comparison_data)
+              │                 └── Card per retailer with If badges, Rx text
+              ├── caches the HTML string
+              ├── starts Flask on :5175 (once)
+              └── webbrowser.open()
 
-Key points:
-- `best_value` (lowest price) is computed at render time → gets a **green glow** border
-- `top_rated` (highest rating) is computed at render time → gets a **yellow glow** border
-- The Flask server uses a `_server_started` flag so it only boots once even if you run multiple searches
-- `dashboard.html` is a fully self-contained file — no CDN, no external CSS, works offline
+Browser (stays open):
+     ├── renders initial cards from baked-in state
+     └── every 3 s → GET /api/data → SetState("data", result)
+                                           └── ForEach re-renders card list
+                                           └── If re-evaluates badges
+                                           └── Rx text nodes update
+                                               ── no page reload
+```
 
 ## How to Run It
 
-### Option A — View the already-generated dashboard (instant)
-
-If a search has already been run, the file `ui/dashboard.html` already exists.  
-Open it directly in your browser — no server needed:
-
-```
-D:\Study\tsai\product_intelligence_mcp\ui\dashboard.html
-```
-
-Or, if the Flask server is still running from a previous script run, just visit:
-
-```
-http://localhost:5050
-```
-
----
-
-### Option B — Run a new search as a standalone Python script
-
-Create a file `run_search.py` in the project folder:
+### Option A — Standalone Python script
 
 ```python
+# run_search.py
 import sys
 sys.path.insert(0, ".")
 from serpapi_client import search_product_prices, search_product_reviews
 from file_manager import save_comparison
 from prefab_client import push_comparison_dashboard
 
-PRODUCT = "mini LED TV"   # change this to any product
+PRODUCT = "mini LED TV"
 
 results = search_product_prices(PRODUCT)
 enriched = []
@@ -187,25 +195,17 @@ save_comparison(PRODUCT, enriched)
 push_comparison_dashboard(PRODUCT, enriched)
 ```
 
-Then run it:
-
 ```bash
-# Windows — use Python 3.10+
 C:\Users\tarun\AppData\Local\Programs\Python\Python310\python.exe run_search.py
 ```
 
-Your browser will open automatically to `http://localhost:5050` when done.
+### Option B — Claude Desktop (intended use)
 
----
-
-### Option C — Connect to Claude Desktop (MCP mode, intended use)
-
-**Step 1** — Find your Claude Desktop config file:
-
+**Step 1** — Find your config file:
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 
-**Step 2** — Add this entry (use absolute paths):
+**Step 2** — Add this entry:
 
 ```json
 {
@@ -218,33 +218,28 @@ Your browser will open automatically to `http://localhost:5050` when done.
 }
 ```
 
-**Step 3** — Restart Claude Desktop completely.
-
-**Step 4** — Click the tools/hammer icon in the chat input — you should see `product-intelligence` with its 6 tools listed.
-
-**Step 5** — Type a prompt like:
+**Step 3** — Restart Claude Desktop, then type:
 
 ```
 Compare boAt Rockerz 450 headphones across all retailers,
 save the comparison, and show me a live dashboard.
 ```
 
-Claude will call all 6 tools in the right order and your browser opens to `http://localhost:5050` automatically.
-
----
+The browser opens to `http://127.0.0.1:5175`. Keep the tab open and run another search — the cards update live.
 
 ## Project structure
 
 ```
 product_intelligence_mcp/
-├── server.py              ← MCP server with 6 tools
-├── prefab_client.py       ← HTML generator + Flask server + browser opener
-├── serpapi_client.py      ← SerpAPI search + review extraction
-├── file_manager.py        ← JSON save / load / list
+├── server.py                     ← MCP server with 6 tools
+├── prefab_app.py                 ← Prefab component tree + build_html()
+├── prefab_client.py              ← Flask server (GET / and GET /api/data)
+├── serpapi_client.py             ← SerpAPI search + review extraction
+├── file_manager.py               ← JSON save / load / list
 ├── ui/
-│   └── dashboard.html     ← auto-generated on each search (git-ignored)
-├── saved_comparisons/     ← timestamped JSON files (auto-created)
-├── .env.example           ← environment variable template
+│   └── current_comparison.json  ← latest comparison data (written each search)
+├── saved_comparisons/            ← timestamped JSON files (auto-created)
+├── .env.example                  ← environment variable template
 ├── requirements.txt
 └── README.md
 ```
