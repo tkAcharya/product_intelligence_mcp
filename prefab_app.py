@@ -88,43 +88,5 @@ def build_html(initial_data: dict) -> str:
             on_tick=Fetch.get("/api/data", on_success=SetState("data", RESULT)),
         ),
     ) as app:
-        with Column(gap=6, css_class="max-w-7xl mx-auto px-8 py-6"):
-
-            # ── Header ──────────────────────────────────────────────────
-            with Row(css_class="items-center justify-between pb-4 border-b gap-4"):
-                with Column(gap=1):
-                    H3(f"🛍️ {product_name}")
-                    Muted(f"Generated at {timestamp}")
-                Badge(f"{comparison_data.length()} retailers", variant="default")
-
-            # ── Retailer cards — rendered reactively via ForEach ─────────
-            with Row(css_class="flex-wrap items-start gap-4"):
-                with ForEach(comparison_data):
-                    with Card(css_class="min-w-64 max-w-xs flex-1"):
-                        with CardContent(css_class="flex flex-col gap-3 pt-4"):
-
-                            with Row(css_class="gap-2 flex-wrap min-h-6"):
-                                with If(ITEM["is_best"]):
-                                    Badge("🏷️ Best Value", variant="success")
-                                with If(ITEM["is_top"]):
-                                    Badge("⭐ Top Rated", variant="outline")
-
-                            H3(ITEM["retailer"])
-                            H4(ITEM["price_raw"])
-
-                            with If(ITEM["rating_str"]):
-                                Muted(ITEM["rating_str"])
-
-                            with If(ITEM["pros_str"]):
-                                Text(ITEM["pros_str"])
-
-                            with If(ITEM["cons_str"]):
-                                Text(ITEM["cons_str"])
-
-                            with If(ITEM["snippet"]):
-                                Muted(f'💬 {ITEM["snippet"]}')
-
-                        with CardFooter():
-                            Link("View Deal →", href=ITEM["link"], target="_blank")
-
+        Text("⏳ Waiting for agent to generate UI…  Ask the agent to compare a product!")
     return app.html()

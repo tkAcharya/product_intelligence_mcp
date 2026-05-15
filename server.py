@@ -4,6 +4,12 @@ from fastmcp import FastMCP
 from serpapi_client import search_product_prices, search_product_reviews
 from file_manager import save_comparison, load_comparison, list_saved_comparisons
 from prefab_client import push_comparison_dashboard
+from models import (
+    SearchToolResult, SearchResult,
+    ReviewToolResult,
+    SaveToolInput, SaveToolResult,
+    RetailerItem,
+)
 
 load_dotenv()
 
@@ -23,13 +29,17 @@ def search_product(product_name: str) -> dict:
     """
     results = search_product_prices(product_name)
     if not results:
-        return {"status": "no_results", "product_name": product_name, "results": []}
-    return {
-        "status": "success",
-        "product_name": product_name,
-        "retailer_count": len(results),
-        "results": results,
-    }
+        return {"status": "no_results", "product_name": product_name, "results": [], "retailer_count": 0}
+
+    # Validate each result row and coerce types
+    validated_results = [SearchResult(**r).model_dump() for r in results]
+    output = SearchToolResult(
+        status="success",
+        product_name=product_name,
+        retailer_count=len(validated_results),
+        results=[SearchResult(**r) for r in validated_results],
+    )
+    return output.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -43,14 +53,15 @@ def get_product_reviews(product_name: str, retailer: str) -> dict:
     Call this for each retailer returned by search_product to enrich the comparison.
     """
     review_data = search_product_reviews(product_name, retailer)
-    return {
-        "status": "success",
-        "product_name": product_name,
-        "retailer": retailer,
-        "pros": review_data.get("pros", []),
-        "cons": review_data.get("cons", []),
-        "review_summary": review_data.get("review_summary", ""),
-    }
+    output = ReviewToolResult(
+        status="success",
+        product_name=product_name,
+        retailer=retailer,
+        pros=review_data.get("pros", []),
+        cons=review_data.get("cons", []),
+        review_summary=review_data.get("review_summary", ""),
+    )
+    return output.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -66,13 +77,20 @@ def save_comparison_to_file(product_name: str, comparison_data: list[dict]) -> d
     Returns the file path of the saved JSON.
     Call this after get_product_reviews and before push_prefab_component.
     """
-    filepath = save_comparison(product_name, comparison_data)
-    return {
-        "status": "success",
-        "product_name": product_name,
-        "file_path": filepath,
-        "retailer_count": len(comparison_data),
-    }
+    # Validate input with Pydantic before persisting
+    validated = SaveToolInput(
+        product_name=product_name,
+        comparison_data=comparison_data,
+    )
+    raw_list = [item.model_dump() for item in validated.comparison_data]
+    filepath = save_comparison(validated.product_name, raw_list)
+    output = SaveToolResult(
+        status="success",
+        product_name=validated.product_name,
+        file_path=filepath,
+        retailer_count=len(raw_list),
+    )
+    return output.model_dump()
 
 
 # ---------------------------------------------------------------------------
